@@ -1,0 +1,888 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Planner Pro</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;margin:18px;max-width:1200px}
+    h1{margin:0 0 10px;font-size:20px}
+    .grid{display:grid;grid-template-columns: 1.4fr 1fr; gap:12px}
+    @media (max-width: 1050px){ .grid{grid-template-columns:1fr} }
+    .card{border:1px solid #ddd;border-radius:14px;padding:14px;margin-bottom:12px}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+    label{font-size:12px;color:#666;display:block;margin-bottom:4px}
+    input,button,select,textarea{font:inherit}
+    input,select,textarea{border:1px solid #ccc;border-radius:10px;padding:8px 10px}
+    button{border:1px solid #bbb;border-radius:10px;padding:9px 12px;background:#fff;cursor:pointer}
+    button.primary{background:#111;color:#fff;border-color:#111}
+    button.danger{border-color:#b00;color:#b00}
+    .muted{color:#666;font-size:12px}
+    .pill{display:inline-block;border:1px solid #ddd;border-radius:999px;padding:3px 8px;font-size:12px}
+    .count{font-variant-numeric:tabular-nums;white-space:nowrap}
+    .kpi{display:grid;grid-template-columns: repeat(4, 1fr); gap:10px; margin-top:10px}
+    @media (max-width: 950px){ .kpi{grid-template-columns: repeat(2, 1fr)} }
+    .kpi .box{border:1px solid #eee;border-radius:12px;padding:10px}
+    .kpi .val{font-size:18px;font-weight:800}
+
+    .timelineWrap{border:1px solid #eee;border-radius:14px;overflow:hidden}
+    .timelineHead{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:10px;background:#fafafa;border-bottom:1px solid #eee}
+    .timeline{position:relative;height:520px;background:#fff}
+    .hours{position:absolute;left:0;top:0;bottom:0;width:70px;border-right:1px solid #eee;background:#fcfcfc}
+    .hours div{height:32px;display:flex;align-items:center;justify-content:center;font-size:11px;color:#666;border-bottom:1px solid #f2f2f2}
+    .gridArea{position:absolute;left:70px;right:0;top:0;bottom:0}
+    .gridLine{position:absolute;left:0;right:0;height:1px;background:#f2f2f2}
+    .nowLine{position:absolute;left:0;right:0;height:2px;background:#111;opacity:.6}
+    .block{
+      position:absolute; border-radius:12px; padding:8px 10px;
+      border:1px solid rgba(0,0,0,.12);
+      box-shadow: 0 1px 0 rgba(0,0,0,.04);
+      user-select:none; cursor:grab; overflow:hidden; min-height:44px;
+    }
+    .block .title{font-weight:800;font-size:13px;line-height:1.2}
+    .block .meta{font-size:11px;opacity:.85;margin-top:4px}
+    .block .badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+    .badge{border:1px solid rgba(0,0,0,.35);border-radius:999px;padding:2px 8px;font-size:11px;background:rgba(255,255,255,.6)}
+    .top3{border-color:#111;font-weight:800}
+    .resizeHandle{position:absolute;left:0;right:0;bottom:0;height:10px;cursor:ns-resize;background:linear-gradient(to bottom, transparent, rgba(0,0,0,.08));}
+
+    table{width:100%;border-collapse:collapse}
+    th,td{border-bottom:1px solid #eee;padding:10px 8px;vertical-align:top}
+    th{font-size:12px;color:#666;text-align:left}
+    .rowSel{outline:2px solid #111}
+
+    .ins{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:10px}
+    @media (max-width: 950px){ .ins{grid-template-columns:1fr} }
+    .ins .box{border:1px solid #eee;border-radius:12px;padding:10px}
+    .ins .t{font-size:12px;color:#666}
+    .ins .v{font-size:14px;font-weight:800;margin-top:4px}
+
+    .warn{border:1px solid #f0c; color:#a0a; padding:8px 10px;border-radius:12px;background:#fff6ff}
+  </style>
+</head>
+<body>
+  <h1>Planner Pro</h1>
+
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>Fecha</label>
+        <input id="date" type="date"/>
+      </div>
+      <div>
+        <label>Orden</label>
+        <select id="sortBy">
+          <option value="plan">Plan (timeline)</option>
+          <option value="priority">Priority desc</option>
+          <option value="real">Real desc</option>
+        </select>
+      </div>
+      <div style="margin-left:auto">
+        <div class="muted">Ahora</div>
+        <div class="pill count" id="now">--:--:--</div>
+      </div>
+    </div>
+
+    <div class="kpi">
+      <div class="box">
+        <div class="muted">⏱ Planeado</div>
+        <div class="val count" id="kPlan">—</div>
+      </div>
+      <div class="box">
+        <div class="muted">⏱ Real</div>
+        <div class="val count" id="kReal">—</div>
+      </div>
+      <div class="box">
+        <div class="muted">Δ (Real - Plan)</div>
+        <div class="val count" id="kDelta">—</div>
+      </div>
+      <div class="box">
+        <div class="muted">🔥 Top 3 (Done/3)</div>
+        <div class="val count" id="kTop3">—</div>
+        <div class="muted" id="kDayVerdict">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="timelineWrap">
+        <div class="timelineHead">
+          <div class="muted">Timeline (06:00 – 24:00) • Arrastra y cambia duración</div>
+          <div class="row" style="margin:0">
+            <button id="planTomorrowBtn">Planear mañana</button>
+            <button id="refreshBtn">Refrescar</button>
+          </div>
+        </div>
+        <div class="timeline" id="timeline">
+          <div class="hours" id="hours"></div>
+          <div class="gridArea" id="gridArea"></div>
+        </div>
+      </div>
+
+      <div id="warn90" class="warn" style="display:none;margin-top:10px">
+        Llevas <b>>90 min</b> sin pausa. ¿Pausar un momento?
+      </div>
+
+      <div class="muted" style="margin-top:10px">
+        Atajos: <b>S</b> Start/Resume • <b>P</b> Pause • <b>D</b> Done • <b>K</b> Skip • Doble click = Start/Resume
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <div class="muted">Nueva / Editar</div>
+
+        <div class="row" style="margin-top:10px">
+          <div style="flex:1;min-width:220px">
+            <label>Actividad</label>
+            <input id="Activity" placeholder="Ej. Preparar CV"/>
+          </div>
+          <div style="width:140px">
+            <label>Type</label>
+            <select id="Type"></select>
+          </div>
+          <div style="width:120px">
+            <label>Priority</label>
+            <input id="Priority" type="number" min="1" max="10" placeholder="1-10"/>
+          </div>
+          <div style="width:110px">
+            <label>Top 3</label>
+            <select id="Top3">
+              <option value="false">No</option>
+              <option value="true">Sí</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:10px">
+          <div style="width:150px">
+            <label>Plan Start</label>
+            <input id="Plan_Start" type="time" step="60"/>
+          </div>
+          <div style="width:150px">
+            <label>Plan End</label>
+            <input id="Plan_End" type="time" step="60"/>
+          </div>
+          <div style="flex:1;min-width:220px">
+            <label>Objective</label>
+            <input id="Objective" placeholder="Ej. Avanzar búsqueda laboral"/>
+          </div>
+        </div>
+
+        <div class="row" style="margin-top:10px">
+          <div style="width:180px">
+            <label>Status</label>
+            <select id="Status">
+              <option>Pending</option>
+              <option>Running</option>
+              <option>Paused</option>
+              <option>Done</option>
+              <option>Skipped</option>
+              <option>Reprogrammed</option>
+            </select>
+          </div>
+          <div style="flex:1;min-width:240px">
+            <label>Skip Reason</label>
+            <input id="Skip_Reason" placeholder="Solo si Skipped"/>
+          </div>
+          <div style="width:180px">
+            <label>Moved To</label>
+            <input id="Moved_To_Date" type="date"/>
+          </div>
+        </div>
+
+        <div style="margin-top:10px">
+          <label>Notes</label>
+          <textarea id="Notes" rows="2" style="width:100%"></textarea>
+        </div>
+
+        <div class="row" style="margin-top:10px">
+          <button class="primary" id="saveBtn">Guardar</button>
+          <button id="clearBtn">Limpiar</button>
+          <span class="muted" id="hint">Creando nuevo…</span>
+        </div>
+
+        <div id="formErr" class="muted" style="color:#b00;margin-top:8px"></div>
+      </div>
+
+      <div class="card">
+        <div class="muted">Insights del día</div>
+        <div class="ins" id="insights">
+          <div class="box"><div class="t">—</div><div class="v">—</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="muted">Vista semanal (últimos 7 días)</div>
+        <div id="week"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="muted">Plan vs Real (tabla)</div>
+    <table style="margin-top:10px">
+      <thead>
+        <tr>
+          <th>Actividad</th>
+          <th>Type</th>
+          <th class="count">Plan</th>
+          <th class="count">Real</th>
+          <th class="count">Δ</th>
+          <th class="count">% desvío</th>
+          <th>Status</th>
+          <th class="count">Acciones</th>
+        </tr>
+      </thead>
+      <tbody id="tbody"><tr><td colspan="8" class="muted">Cargando…</td></tr></tbody>
+    </table>
+  </div>
+
+<script>
+  let rows = [];
+  let editingId = null;
+  let meta = null;
+  let selectedId = null;
+
+  const START_HOUR = 6;
+  const END_HOUR = 24;
+  const MINUTES_PER_SLOT = 15;
+  const PX_PER_SLOT = 16;
+  const GRID_HEIGHT = ((END_HOUR-START_HOUR)*60/MINUTES_PER_SLOT)*PX_PER_SLOT;
+
+  const TYPE_COLOR = {
+    "Trabajo": "rgba(0,0,0,.06)",
+    "Personal": "rgba(0,0,0,.04)",
+    "Finanzas": "rgba(0,0,0,.05)",
+    "Social": "rgba(0,0,0,.03)",
+    "Descanso": "rgba(0,0,0,.02)",
+  };
+
+  const $ = (id)=>document.getElementById(id);
+  const pad = (n)=>String(n).padStart(2,"0");
+
+  function escapeHtml(s){
+    return String(s).replace(/[&<>"']/g, m => ({
+      "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"
+    }[m]));
+  }
+
+  function setDefaultDate(){
+    const d = new Date();
+    $("date").value = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+  }
+
+  function fmtHMS(sec){
+    sec = Math.max(0, Math.floor(sec||0));
+    const hh = Math.floor(sec/3600);
+    const mm = Math.floor((sec%3600)/60);
+    const ss = sec%60;
+    return `${pad(hh)}:${pad(mm)}:${pad(ss)}`;
+  }
+
+  function parseHHmmToMin(t){
+    const m = String(t||"").match(/^(\d{1,2}):(\d{2})$/);
+    if(!m) return null;
+    return Number(m[1])*60+Number(m[2]);
+  }
+  function minToHHmm(min){
+    min = ((min%(24*60))+(24*60))%(24*60);
+    return `${pad(Math.floor(min/60))}:${pad(min%60)}`;
+  }
+  function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+
+  function planSec(r){
+    const s = parseHHmmToMin(r.data.Plan_Start);
+    const e = parseHHmmToMin(r.data.Plan_End);
+    if(s==null || e==null) return 0;
+    let d = e-s; if(d<0) d += 24*60;
+    return d*60;
+  }
+
+  function realSec(r){
+    const base = Number(r.data.Actual_Seconds||0);
+    if (r.data.Status==="Running" && r.data.Last_Timer_StartISO){
+      const t0 = new Date(r.data.Last_Timer_StartISO).getTime();
+      if (Number.isFinite(t0)){
+        const delta = Math.max(0, Math.floor((Date.now()-t0)/1000));
+        return base + delta;
+      }
+    }
+    return base;
+  }
+
+  function typeColor(type){
+    return TYPE_COLOR[type] || "rgba(0,0,0,.05)";
+  }
+
+  function buildHours(){
+    const h = $("hours");
+    h.innerHTML = "";
+    const totalSlots = ((END_HOUR-START_HOUR)*60)/MINUTES_PER_SLOT;
+    $("timeline").style.height = (totalSlots*PX_PER_SLOT) + "px";
+
+    for(let i=0;i<totalSlots;i++){
+      const m = START_HOUR*60 + i*MINUTES_PER_SLOT;
+      const isHour = (m % 60)===0;
+      const div = document.createElement("div");
+      div.style.height = PX_PER_SLOT+"px";
+      div.textContent = isHour ? minToHHmm(m) : "";
+      h.appendChild(div);
+    }
+
+    const g = $("gridArea");
+    g.style.height = (totalSlots*PX_PER_SLOT)+"px";
+    g.innerHTML = "";
+    for(let i=0;i<=totalSlots;i++){
+      const line = document.createElement("div");
+      line.className = "gridLine";
+      line.style.top = (i*PX_PER_SLOT)+"px";
+      g.appendChild(line);
+    }
+  }
+
+  function computeLayoutBlocks(){
+    const items = rows
+      .map(r=>{
+        const s = parseHHmmToMin(r.data.Plan_Start);
+        const e = parseHHmmToMin(r.data.Plan_End);
+        return { r, s, e };
+      })
+      .filter(x=>x.s!=null && x.e!=null);
+
+    for (const it of items){
+      let s = it.s, e = it.e;
+      if (e < s) e += 24*60;
+      it.sN = s;
+      it.eN = e;
+    }
+
+    items.sort((a,b)=>a.sN-b.sN);
+
+    const lanes = [];
+    const placed = [];
+
+    for (const it of items){
+      let lane = 0;
+      while(lane < lanes.length && it.sN < lanes[lane]) lane++;
+      if (lane===lanes.length) lanes.push(it.eN);
+      else lanes[lane] = it.eN;
+      placed.push({ ...it, lane });
+    }
+
+    return { placed, laneCount: lanes.length };
+  }
+
+  function minToY(min){
+    const viewStart = START_HOUR*60;
+    const slot = (min - viewStart) / MINUTES_PER_SLOT;
+    return slot * PX_PER_SLOT;
+  }
+
+  function enableDragResize(el, row){
+    const handle = el.querySelector(".resizeHandle");
+    let mode = null;
+    let startY = 0;
+    let origTop = 0;
+    let origH = 0;
+
+    const onDown = (e, m)=>{
+      e.preventDefault();
+      mode = m;
+      startY = e.clientY;
+      origTop = parseFloat(el.style.top);
+      origH = parseFloat(el.style.height);
+      el.style.cursor = (mode==="drag") ? "grabbing" : "ns-resize";
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    };
+
+    const onMove = (e)=>{
+      const dy = e.clientY - startY;
+      const snapped = Math.round(dy / PX_PER_SLOT) * PX_PER_SLOT;
+
+      if (mode==="drag"){
+        let top = origTop + snapped;
+        top = clamp(top, 0, GRID_HEIGHT - origH);
+        el.style.top = top + "px";
+      }
+      if (mode==="resize"){
+        let h = origH + snapped;
+        h = clamp(h, 44, GRID_HEIGHT - origTop);
+        el.style.height = h + "px";
+      }
+    };
+
+    const onUp = ()=>{
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      el.style.cursor = "grab";
+
+      const top = parseFloat(el.style.top);
+      const h = parseFloat(el.style.height);
+
+      const startSlots = Math.round(top / PX_PER_SLOT);
+      const durSlots = Math.round(h / PX_PER_SLOT);
+
+      const startMin = START_HOUR*60 + startSlots*MINUTES_PER_SLOT;
+      const endMin = startMin + durSlots*MINUTES_PER_SLOT;
+
+      const planStart = minToHHmm(startMin);
+      const planEnd = minToHHmm(endMin);
+
+      row.data.Plan_Start = planStart;
+      row.data.Plan_End = planEnd;
+
+      renderAllLight();
+
+      google.script.run
+        .withFailureHandler(err=>alert(err.message||err))
+        .setPlanTimes(row.id, planStart, planEnd);
+
+      mode = null;
+    };
+
+    el.addEventListener("mousedown",(e)=>{
+      if (e.target === handle) return;
+      onDown(e,"drag");
+    });
+
+    handle.addEventListener("mousedown",(e)=>onDown(e,"resize"));
+  }
+
+  function renderTimeline(){
+    const g = $("gridArea");
+    [...g.querySelectorAll(".block,.nowLine")].forEach(n=>n.remove());
+
+    const { placed, laneCount } = computeLayoutBlocks();
+
+    const now = new Date();
+    const nowMin = now.getHours()*60+now.getMinutes();
+    if (nowMin >= START_HOUR*60 && nowMin <= END_HOUR*60){
+      const nl = document.createElement("div");
+      nl.className = "nowLine";
+      nl.style.top = minToY(nowMin)+"px";
+      g.appendChild(nl);
+    }
+
+    const width = g.clientWidth || 800;
+    const laneW = Math.max(240, Math.floor(width / Math.max(1, laneCount))) - 10;
+
+    for (const it of placed){
+      const r = it.r;
+      const y1 = minToY(it.sN);
+      const y2 = minToY(it.eN);
+      const h = Math.max(44, y2 - y1);
+
+      const block = document.createElement("div");
+      block.className = "block";
+      block.dataset.id = r.id;
+
+      const left = it.lane * (laneW + 10);
+      block.style.left = left+"px";
+      block.style.width = laneW+"px";
+      block.style.top = y1+"px";
+      block.style.height = h+"px";
+      block.style.background = typeColor(r.data.Type);
+
+      if (selectedId === r.id) block.style.outline = "2px solid #111";
+
+      const top3 = r.data.Top3 ? `<span class="badge top3">Top 3</span>` : "";
+      const st = r.data.Status || "Pending";
+
+      const badges = `
+        <span class="badge">${escapeHtml(st)}</span>
+        <span class="badge">${escapeHtml(r.data.Type||"")}</span>
+        ${top3}
+      `;
+
+      const plan = `${r.data.Plan_Start||"—"}–${r.data.Plan_End||"—"}`;
+      const real = fmtHMS(realSec(r));
+      const deltaSec = realSec(r) - planSec(r);
+      const delta = (deltaSec>=0?"+":"-") + fmtHMS(Math.abs(deltaSec));
+
+      block.innerHTML = `
+        <div class="title">${escapeHtml(r.data.Activity||"—")}</div>
+        <div class="meta">Plan: <span class="count">${plan}</span> • Real: <span class="count">${real}</span> • Δ <span class="count">${delta}</span></div>
+        <div class="badges">${badges}</div>
+        <div class="resizeHandle" title="Arrastra para cambiar duración"></div>
+      `;
+
+      block.addEventListener("click",(e)=>{
+        e.stopPropagation();
+        selectedId = r.id;
+        fillForm(r);      // ✅ editar al seleccionar
+        renderAll();
+      });
+
+      block.addEventListener("dblclick",(e)=>{
+        e.stopPropagation();
+        quickStartResume(r.id);
+      });
+
+      enableDragResize(block, r);
+      g.appendChild(block);
+    }
+
+    g.onclick = ()=>{ selectedId=null; renderAll(); };
+  }
+
+  function renderTable(){
+    const tb = $("tbody");
+    if (!rows.length){
+      tb.innerHTML = `<tr><td colspan="8" class="muted">No hay actividades.</td></tr>`;
+      return;
+    }
+
+    const sorted = [...rows];
+    const sortBy = $("sortBy").value;
+    if (sortBy==="priority"){
+      sorted.sort((a,b)=> (Number(b.data.Priority||-Infinity) - Number(a.data.Priority||-Infinity)));
+    } else if (sortBy==="real"){
+      sorted.sort((a,b)=> realSec(b)-realSec(a));
+    } else {
+      sorted.sort((a,b)=> (a.data.Plan_Start||"").localeCompare(b.data.Plan_Start||""));
+    }
+
+    tb.innerHTML = sorted.map(r=>{
+      const p = planSec(r);
+      const real = realSec(r);
+      const delta = real - p;
+      const pct = p>0 ? (delta/p*100) : 0;
+
+      const pctTxt = p>0 ? `${pct.toFixed(0)}%` : "—";
+      const deltaTxt = (delta>=0?"+":"-") + fmtHMS(Math.abs(delta));
+      const planTxt = p>0 ? fmtHMS(p) : "—";
+      const realTxt = fmtHMS(real);
+      const st = r.data.Status || "Pending";
+
+      return `
+        <tr data-id="${r.id}" class="${selectedId===r.id?'rowSel':''}">
+          <td style="font-weight:800">${escapeHtml(r.data.Activity||"—")}</td>
+          <td>${escapeHtml(r.data.Type||"—")}</td>
+          <td class="count">${planTxt}</td>
+          <td class="count">${realTxt}</td>
+          <td class="count">${deltaTxt}</td>
+          <td class="count">${pctTxt}</td>
+          <td>${escapeHtml(st)}</td>
+          <td class="count">
+            <button onclick="editFromTable(event,'${r.id}')">Editar</button>
+            <button onclick="act('${r.id}','start')">Start</button>
+            <button onclick="act('${r.id}','pause')">Pause</button>
+            <button onclick="act('${r.id}','resume')">Resume</button>
+            <button onclick="act('${r.id}','stop')">Done</button>
+            <button onclick="skip('${r.id}')">Skip</button>
+            <button class="danger" onclick="delRow('${r.id}')">Borrar</button>
+          </td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  window.editFromTable = (ev, id)=>{
+    ev.stopPropagation();
+    selectedId = Number(id);
+
+    google.script.run
+      .withSuccessHandler(res=>{
+        editingId = res.id;
+        fillForm(res);
+        renderAll();
+      })
+      .withFailureHandler(err=>alert(err.message||err))
+      .getRowById(Number(id));
+  };
+
+  function bindTableRowClicks(){
+    const tb = $("tbody");
+    tb.onclick = (e)=>{
+      const tr = e.target.closest("tr[data-id]");
+      if (!tr) return;
+      if (e.target.closest("button")) return;
+
+      const id = Number(tr.dataset.id);
+      selectedId = id;
+
+      const local = rows.find(x=>Number(x.id)===id);
+      if (local){
+        fillForm(local);
+        renderAll();
+      } else {
+        google.script.run
+          .withSuccessHandler(res=>{ fillForm(res); renderAll(); })
+          .withFailureHandler(err=>alert(err.message||err))
+          .getRowById(id);
+      }
+    };
+  }
+
+  function renderKPIs(){
+    let plan = 0, real = 0;
+    let top3Total = 0, top3Done = 0;
+
+    let productive = 0, admin = 0, dispersion = 0;
+
+    for (const r of rows){
+      plan += planSec(r);
+      const rs = realSec(r);
+      real += rs;
+
+      if (r.data.Top3){
+        top3Total++;
+        if (r.data.Status==="Done") top3Done++;
+      }
+
+      const t = r.data.Type;
+      if (t==="Trabajo" || t==="Finanzas" || t==="Crecimiento") productive += rs;
+      else if (t==="Personal" || t==="Social") admin += rs;
+      else if (t==="Descanso") dispersion += rs;
+      else admin += rs;
+    }
+
+    $("kPlan").textContent = fmtHMS(plan);
+    $("kReal").textContent = fmtHMS(real);
+
+    const delta = real - plan;
+    $("kDelta").textContent = (delta>=0?"+":"-") + fmtHMS(Math.abs(delta));
+
+    $("kTop3").textContent = `${top3Done}/${Math.max(3, top3Total||0)}`;
+
+    const verdict = (top3Total>=3 && top3Done<3)
+      ? "⚠️ Día fallido (Top 3 incompleto)"
+      : "✅ Día OK (Top 3 completo o no definido)";
+
+    $("kDayVerdict").textContent = verdict;
+    $("kDayVerdict").title = `Productivo: ${fmtHMS(productive)} • Admin: ${fmtHMS(admin)} • Dispersión: ${fmtHMS(dispersion)}`;
+  }
+
+  function refreshInsights(){
+    google.script.run
+      .withSuccessHandler(res=>{
+        const el = $("insights");
+        const ins = (res && res.insights) ? res.insights : [];
+        if (!ins.length){
+          el.innerHTML = `<div class="box"><div class="t">—</div><div class="v">Sin datos</div></div>`;
+          return;
+        }
+        el.innerHTML = ins.map(x=>`
+          <div class="box">
+            <div class="t">${escapeHtml(x.title)}</div>
+            <div class="v">${escapeHtml(x.value)}</div>
+          </div>
+        `).join("");
+      })
+      .getInsights($("date").value);
+  }
+
+  function refreshWeek(){
+    google.script.run
+      .withSuccessHandler(res=>{
+        const days = (res && res.days) ? res.days : [];
+        if (!days.length){
+          $("week").innerHTML = `<div class="muted">Sin datos esta semana.</div>`;
+          return;
+        }
+        $("week").innerHTML = `
+          <table style="margin-top:10px">
+            <thead><tr><th>Día</th><th class="count">Plan</th><th class="count">Real</th><th class="count">Top3</th></tr></thead>
+            <tbody>
+              ${days.map(d=>{
+                const plan = fmtHMS(d.planSec);
+                const real = fmtHMS(d.actualSec);
+                const top = `${d.top3Done}/${Math.max(d.top3Total,3)}`;
+                return `<tr><td>${escapeHtml(d.date)}</td><td class="count">${plan}</td><td class="count">${real}</td><td class="count">${top}</td></tr>`;
+              }).join("")}
+            </tbody>
+          </table>
+        `;
+      })
+      .getWeekSummary($("date").value);
+  }
+
+  window.act = (id, action)=>{
+    google.script.run
+      .withSuccessHandler(res=>{
+        const idx = rows.findIndex(x=>String(x.id)===String(id));
+        if (idx>=0) rows[idx] = res;
+        renderAll();
+      })
+      .withFailureHandler(err=>alert(err.message||err))
+      .timerAction(Number(id), action, $("date").value);
+  };
+
+  window.skip = (id)=>{
+    const reason = prompt("¿Por qué se skippeó?");
+    if (reason===null) return;
+    const moved = prompt("¿Mover a qué día? (YYYY-MM-DD) (opcional)", "");
+    const meta = { Skip_Reason: reason, Moved_To_Date: moved || "" };
+
+    google.script.run
+      .withSuccessHandler(()=>refresh())
+      .withFailureHandler(err=>alert(err.message||err))
+      .setStatus(Number(id), "Skipped", meta);
+  };
+
+  window.delRow = (id)=>{
+    const r = rows.find(x=>String(x.id)===String(id));
+    const real = r ? realSec(r) : 0;
+
+    if (real>0){
+      if(!confirm("Esta actividad tiene tiempo REAL registrado. ¿Seguro que quieres borrarla?")) return;
+    }
+    if(!confirm("Confirmación final: ¿Borrar?")) return;
+
+    google.script.run
+      .withSuccessHandler(()=>refresh())
+      .withFailureHandler(err=>alert(err.message||err))
+      .clearRowById(Number(id));
+  };
+
+  function quickStartResume(id){
+    const r = rows.find(x=>x.id===id);
+    if (!r) return;
+    if (r.data.Status==="Paused") act(id,"resume");
+    else if (r.data.Status==="Running") act(id,"pause");
+    else act(id,"start");
+  }
+
+  function check90(){
+    const r = rows.find(x=>x.data.Status==="Running" && x.data.Last_Timer_StartISO);
+    if (!r) { $("warn90").style.display="none"; return; }
+    const t0 = new Date(r.data.Last_Timer_StartISO).getTime();
+    if (!Number.isFinite(t0)) return;
+    const mins = (Date.now()-t0)/60000;
+    $("warn90").style.display = (mins>=90) ? "block" : "none";
+  }
+
+  function clearForm(){
+    editingId = null;
+    $("hint").textContent = "Creando nuevo…";
+    ["Activity","Priority","Objective","Plan_Start","Plan_End","Skip_Reason","Moved_To_Date","Notes"].forEach(id=>$(id).value="");
+    $("Top3").value="false";
+    $("Status").value="Pending";
+    $("Type").value = meta?.types?.[0] || "Trabajo";
+    $("formErr").textContent="";
+  }
+
+  function fillForm(r){
+    editingId = r.id;
+    $("hint").textContent = `Editando fila #${r.id}`;
+    $("Activity").value = r.data.Activity || "";
+    $("Type").value = r.data.Type || (meta?.types?.[0]||"Trabajo");
+    $("Priority").value = (r.data.Priority===""||r.data.Priority==null) ? "" : String(r.data.Priority);
+    $("Top3").value = r.data.Top3 ? "true":"false";
+    $("Objective").value = r.data.Objective || "";
+    $("Plan_Start").value = r.data.Plan_Start || "";
+    $("Plan_End").value = r.data.Plan_End || "";
+    $("Status").value = r.data.Status || "Pending";
+    $("Skip_Reason").value = r.data.Skip_Reason || "";
+    $("Moved_To_Date").value = r.data.Moved_To_Date || "";
+    $("Notes").value = r.data.Notes || "";
+    $("formErr").textContent="";
+  }
+
+  function save(){
+    const data = {
+      Date: $("date").value,
+      Activity: $("Activity").value.trim(),
+      Type: $("Type").value,
+      Priority: $("Priority").value.trim()==="" ? "" : Number($("Priority").value),
+      Top3: $("Top3").value==="true",
+      Objective: $("Objective").value.trim(),
+      Plan_Start: $("Plan_Start").value,
+      Plan_End: $("Plan_End").value,
+      Status: $("Status").value,
+      Skip_Reason: $("Skip_Reason").value.trim(),
+      Moved_To_Date: $("Moved_To_Date").value,
+      Notes: $("Notes").value.trim()
+    };
+
+    if (!data.Date || !data.Activity){
+      $("formErr").textContent="Falta Fecha o Actividad.";
+      return;
+    }
+
+    google.script.run
+      .withSuccessHandler(()=>{ clearForm(); refresh(); })
+      .withFailureHandler(err=>{ $("formErr").textContent = err.message||err; })
+      .upsertRow({ id: editingId, data });
+  }
+
+  function refresh(){
+    const dateStr = $("date").value;
+    $("tbody").innerHTML = `<tr><td colspan="8" class="muted">Cargando…</td></tr>`;
+
+    google.script.run
+      .withSuccessHandler(res=>{
+        rows = res || [];
+        renderAll();
+        refreshInsights();
+        refreshWeek();
+      })
+      .withFailureHandler(err=>{
+        $("tbody").innerHTML = `<tr><td colspan="8" style="color:#b00">Error: ${escapeHtml(err.message||err)}</td></tr>`;
+      })
+      .getDayRows(dateStr);
+  }
+
+  function renderAll(){
+    renderKPIs();
+    renderTimeline();
+    renderTable();
+    bindTableRowClicks();
+  }
+  function renderAllLight(){
+    renderKPIs();
+    renderTable();
+    bindTableRowClicks();
+  }
+
+  function initMeta(){
+    google.script.run
+      .withSuccessHandler(res=>{
+        meta = res;
+        $("Type").innerHTML = meta.types.map(t=>`<option>${escapeHtml(t)}</option>`).join("");
+        clearForm();
+      })
+      .getMeta();
+  }
+
+  function planTomorrow(){
+    google.script.run
+      .withSuccessHandler(res=>alert(`Listo. Copié ${res.created} actividades a ${res.date}`))
+      .withFailureHandler(err=>alert(err.message||err))
+      .planTomorrow($("date").value);
+  }
+
+  window.addEventListener("keydown",(e)=>{
+    if (!selectedId) return;
+    if (["INPUT","TEXTAREA","SELECT"].includes(document.activeElement?.tagName)) return;
+
+    if (e.key.toLowerCase()==="s"){ quickStartResume(selectedId); }
+    if (e.key.toLowerCase()==="p"){ act(selectedId,"pause"); }
+    if (e.key.toLowerCase()==="d"){ act(selectedId,"stop"); }
+    if (e.key.toLowerCase()==="k"){ skip(selectedId); }
+  });
+
+  function tick(){
+    $("now").textContent = new Date().toLocaleTimeString();
+    renderKPIs();
+    check90();
+    renderTimeline();
+  }
+
+  setDefaultDate();
+  buildHours();
+  initMeta();
+  refresh();
+
+  $("refreshBtn").addEventListener("click", refresh);
+  $("saveBtn").addEventListener("click", save);
+  $("clearBtn").addEventListener("click", clearForm);
+  $("planTomorrowBtn").addEventListener("click", planTomorrow);
+
+  setInterval(tick, 1000);
+</script>
+</body>
+</html>
