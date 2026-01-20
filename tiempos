@@ -1,0 +1,474 @@
+const SHEET_NAME = "Sheet1";
+
+const HEADERS = [
+  "Date","Plan_Start","Plan_End","Activity","Type","Priority","Top3","Objective",
+  "Status","Skip_Reason","Moved_To_Date",
+  "Actual_Start","Actual_End","Actual_Seconds","Paused_Seconds",
+  "Last_Timer_StartISO","Last_Timer_PauseISO",
+  "Created_At","Updated_At","Notes","Color"
+];
+
+const STATUS = {
+  PENDING: "Pending",
+  RUNNING: "Running",
+  PAUSED: "Paused",
+  DONE: "Done",
+  SKIPPED: "Skipped",
+  REPROGRAMMED: "Reprogrammed",
+};
+
+const TYPE_DEFAULTS = ["Trabajo","Personal","Finanzas","Social","Descanso"];
+const TZ = Session.getScriptTimeZone();
+
+function doGet() {
+  return HtmlService.createHtmlOutputFromFile("index").setTitle("Planner Pro");
+}
+
+function setupSheet_() {
+  const ss = SpreadsheetApp.getActive();
+  let sh = ss.getSheetByName(SHEET_NAME);
+  if (!sh) sh = ss.insertSheet(SHEET_NAME);
+
+  // Solo si está vacío, ponemos headers
+  if (sh.getLastRow() < 1) {
+    sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+    sh.setFrozenRows(1);
+  } else {
+    // Si la primera fila no coincide, igual la re-escribimos (opcional)
+    const first = sh.getRange(1,1,1,HEADERS.length).getValues()[0];
+    const same = first.join("|") === HEADERS.join("|");
+    if (!same) {
+      sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+      sh.setFrozenRows(1);
+    }
+  }
+
+  // Oculta internos (P,Q) => 16,2 (Last_Timer_StartISO, Last_Timer_PauseISO)
+  try { sh.hideColumns(16, 2); } catch(e) {}
+
+  return sh;
+}
+
+function _idx_(name){ return HEADERS.indexOf(name); }
+
+function parseYMD_(ymd) {
+  // ymd: "YYYY-MM-DD"
+  return new Date(ymd + "T00:00:00");
+}
+
+function toYMD_(v) {
+  if (!v) return "";
+  if (Object.prototype.toString.call(v) === "[object Date]" && !isNaN(v.getTime())) {
+    return Utilities.formatDate(v, TZ, "yyyy-MM-dd");
+  }
+  const s = String(v).trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : "";
+}
+
+function normalizeTime_(v) {
+  if (!v) return "";
+  if (Object.prototype.toString.call(v) === "[object Date]" && !isNaN(v.getTime())) {
+    return Utilities.formatDate(v, TZ, "HH:mm");
+  }
+  const s = String(v).trim();
+  const m = s.match(/^(\d{1,2}):(\d{2})/);
+  if (!m) return "";
+  const hh = String(Number(m[1])).padStart(2, "0");
+  const mm = String(Number(m[2])).padStart(2, "0");
+  return `${hh}:${mm}`;
+}
+
+function rowToObj_(row){
+  return {
+    Date: toYMD_(row[_idx_("Date")]),
+    Plan_Start: normalizeTime_(row[_idx_("Plan_Start")]),
+    Plan_End: normalizeTime_(row[_idx_("Plan_End")]),
+    Activity: String(row[_idx_("Activity")] || ""),
+    Type: String(row[_idx_("Type")] || ""),
+    Priority: row[_idx_("Priority")] === "" || row[_idx_("Priority")] == null ? "" : Number(row[_idx_("Priority")]),
+    Top3: row[_idx_("Top3")] === true,
+    Objective: String(row[_idx_("Objective")] || ""),
+    Status: String(row[_idx_("Status")] || STATUS.PENDING),
+    Skip_Reason: String(row[_idx_("Skip_Reason")] || ""),
+    Moved_To_Date: toYMD_(row[_idx_("Moved_To_Date")]),
+    Actual_Start: normalizeTime_(row[_idx_("Actual_Start")]),
+    Actual_End: normalizeTime_(row[_idx_("Actual_End")]),
+    Actual_Seconds: Number(row[_idx_("Actual_Seconds")] || 0),
+    Paused_Seconds: Number(row[_idx_("Paused_Seconds")] || 0),
+    Last_Timer_StartISO: String(row[_idx_("Last_Timer_StartISO")] || ""),
+    Last_Timer_PauseISO: String(row[_idx_("Last_Timer_PauseISO")] || ""),
+    Notes: String(row[_idx_("Notes")] || ""),
+    Color: String(row[_idx_("Color")] || "")
+  };
+}
+
+function getDayRows(dateStr) {
+  const sh = setupSheet_();
+  const lastRow = sh.getLastRow();
+  if (lastRow < 2) return [];
+
+  const values = sh.getRange(2, 1, lastRow - 1, HEADERS.length).getValues();
+  const out = [];
+
+  for (let i=0;i<values.length;i++){
+    const rowNum = i + 2;
+    const d = toYMD_(values[i][_idx_("Date")]);
+    if (d !== dateStr) continue;
+    out.push({ id: rowNum, data: rowToObj_(values[i]) });
+  }
+  return out;
+}
+
+// ✅ NUEVO: obtener una fila por id (para editar desde tabla con datos frescos)
+function getRowById(id){
+  const sh = setupSheet_();
+  const rowNum = Number(id);
+  if (!rowNum || rowNum < 2) throw new Error("Invalid id");
+  const row = sh.getRange(rowNum,1,1,HEADERS.length).getValues()[0];
+  return { id: rowNum, data: rowToObj_(row) };
+}
+
+function upsertRow(payload) {
+  const sh = setupSheet_();
+  if (!payload || !payload.data) throw new Error("Missing data");
+
+  const d = payload.data;
+  if (!d.Date) throw new Error("Date required");
+  if (!d.Activity) throw new Error("Activity required");
+
+  const now = new Date();
+  const rowValues = new Array(HEADERS.length).fill("");
+
+  rowValues[_idx_("Date")] = parseYMD_(String(d.Date));
+  rowValues[_idx_("Plan_Start")] = normalizeTime_(d.Plan_Start);
+  rowValues[_idx_("Plan_End")] = normalizeTime_(d.Plan_End);
+  rowValues[_idx_("Activity")] = String(d.Activity);
+  rowValues[_idx_("Type")] = String(d.Type || "");
+  rowValues[_idx_("Priority")] = (d.Priority===""||d.Priority==null) ? "" : Number(d.Priority);
+  rowValues[_idx_("Top3")] = d.Top3 === true;
+  rowValues[_idx_("Objective")] = String(d.Objective || "");
+  rowValues[_idx_("Status")] = String(d.Status || STATUS.PENDING);
+  rowValues[_idx_("Skip_Reason")] = String(d.Skip_Reason || "");
+  rowValues[_idx_("Moved_To_Date")] = d.Moved_To_Date ? parseYMD_(String(d.Moved_To_Date)) : "";
+  rowValues[_idx_("Actual_Start")] = normalizeTime_(d.Actual_Start);
+  rowValues[_idx_("Actual_End")] = normalizeTime_(d.Actual_End);
+  rowValues[_idx_("Actual_Seconds")] = Number(d.Actual_Seconds || 0);
+  rowValues[_idx_("Paused_Seconds")] = Number(d.Paused_Seconds || 0);
+  rowValues[_idx_("Last_Timer_StartISO")] = String(d.Last_Timer_StartISO || "");
+  rowValues[_idx_("Last_Timer_PauseISO")] = String(d.Last_Timer_PauseISO || "");
+  rowValues[_idx_("Notes")] = String(d.Notes || "");
+  rowValues[_idx_("Color")] = String(d.Color || "");
+
+  const rowNum = payload.id ? Number(payload.id) : null;
+
+  if (!rowNum){
+    rowValues[_idx_("Created_At")] = now;
+    rowValues[_idx_("Updated_At")] = now;
+    sh.appendRow(rowValues);
+    return { ok:true, id: sh.getLastRow() };
+  } else {
+    if (rowNum < 2) throw new Error("Invalid id");
+    const existing = sh.getRange(rowNum,1,1,HEADERS.length).getValues()[0];
+    rowValues[_idx_("Created_At")] = existing[_idx_("Created_At")] || now;
+    rowValues[_idx_("Updated_At")] = now;
+    sh.getRange(rowNum,1,1,HEADERS.length).setValues([rowValues]);
+    return { ok:true, id: rowNum };
+  }
+}
+
+function clearRowById(id) {
+  const sh = setupSheet_();
+  const rowNum = Number(id);
+  if (!rowNum || rowNum < 2) throw new Error("Invalid id");
+  sh.getRange(rowNum, 1, 1, HEADERS.length).clearContent();
+  return { ok: true };
+}
+
+function setPlanTimes(id, planStart, planEnd) {
+  const sh = setupSheet_();
+  const rowNum = Number(id);
+  if (!rowNum || rowNum < 2) throw new Error("Invalid id");
+
+  sh.getRange(rowNum, _idx_("Plan_Start")+1).setValue(normalizeTime_(planStart));
+  sh.getRange(rowNum, _idx_("Plan_End")+1).setValue(normalizeTime_(planEnd));
+  sh.getRange(rowNum, _idx_("Updated_At")+1).setValue(new Date());
+  return { ok:true };
+}
+
+function setStatus(id, status, meta) {
+  const sh = setupSheet_();
+  const rowNum = Number(id);
+  if (!rowNum || rowNum < 2) throw new Error("Invalid id");
+
+  sh.getRange(rowNum, _idx_("Status")+1).setValue(String(status||STATUS.PENDING));
+  if (meta && typeof meta === "object") {
+    if (meta.Skip_Reason != null) sh.getRange(rowNum,_idx_("Skip_Reason")+1).setValue(String(meta.Skip_Reason));
+    if (meta.Moved_To_Date) sh.getRange(rowNum,_idx_("Moved_To_Date")+1).setValue(parseYMD_(String(meta.Moved_To_Date)));
+  }
+  sh.getRange(rowNum, _idx_("Updated_At")+1).setValue(new Date());
+  return { ok:true };
+}
+
+function timerAction(id, action, dateStr) {
+  const sh = setupSheet_();
+  const rowNum = Number(id);
+  if (!rowNum || rowNum < 2) throw new Error("Invalid id");
+
+  const row = sh.getRange(rowNum,1,1,HEADERS.length).getValues()[0];
+
+  const st = String(row[_idx_("Status")] || STATUS.PENDING);
+  const lastStartISO = String(row[_idx_("Last_Timer_StartISO")] || "");
+  const lastPauseISO = String(row[_idx_("Last_Timer_PauseISO")] || "");
+  const actualSec = Number(row[_idx_("Actual_Seconds")] || 0);
+  const pausedSec = Number(row[_idx_("Paused_Seconds")] || 0);
+
+  const now = new Date();
+  const iso = now.toISOString();
+  const hhmm = Utilities.formatDate(now, TZ, "HH:mm");
+
+  const d = toYMD_(row[_idx_("Date")]);
+  if (!d && dateStr) row[_idx_("Date")] = parseYMD_(dateStr);
+
+  if (action === "start") {
+    row[_idx_("Status")] = STATUS.RUNNING;
+    if (!row[_idx_("Actual_Start")]) row[_idx_("Actual_Start")] = hhmm;
+    row[_idx_("Last_Timer_StartISO")] = iso;
+    row[_idx_("Last_Timer_PauseISO")] = "";
+  }
+
+  if (action === "pause") {
+    if (st !== STATUS.RUNNING || !lastStartISO) throw new Error("Not running");
+    const delta = Math.max(0, Math.floor((now.getTime() - new Date(lastStartISO).getTime())/1000));
+    row[_idx_("Actual_Seconds")] = actualSec + delta;
+    row[_idx_("Status")] = STATUS.PAUSED;
+    row[_idx_("Last_Timer_StartISO")] = "";
+    row[_idx_("Last_Timer_PauseISO")] = iso;
+  }
+
+  if (action === "resume") {
+    if (st !== STATUS.PAUSED) throw new Error("Not paused");
+    if (lastPauseISO){
+      const p = Math.max(0, Math.floor((now.getTime() - new Date(lastPauseISO).getTime())/1000));
+      row[_idx_("Paused_Seconds")] = pausedSec + p;
+    }
+    row[_idx_("Status")] = STATUS.RUNNING;
+    row[_idx_("Last_Timer_StartISO")] = iso;
+    row[_idx_("Last_Timer_PauseISO")] = "";
+  }
+
+  if (action === "stop") {
+    if (st === STATUS.RUNNING && lastStartISO){
+      const delta = Math.max(0, Math.floor((now.getTime() - new Date(lastStartISO).getTime())/1000));
+      row[_idx_("Actual_Seconds")] = actualSec + delta;
+    }
+    if (st === STATUS.PAUSED && lastPauseISO){
+      const p = Math.max(0, Math.floor((now.getTime() - new Date(lastPauseISO).getTime())/1000));
+      row[_idx_("Paused_Seconds")] = pausedSec + p;
+    }
+    row[_idx_("Actual_End")] = hhmm;
+    row[_idx_("Status")] = STATUS.DONE;
+    row[_idx_("Last_Timer_StartISO")] = "";
+    row[_idx_("Last_Timer_PauseISO")] = "";
+  }
+
+  row[_idx_("Updated_At")] = now;
+  if (!row[_idx_("Created_At")]) row[_idx_("Created_At")] = now;
+
+  sh.getRange(rowNum,1,1,HEADERS.length).setValues([row]);
+  return { id: rowNum, data: rowToObj_(row) };
+}
+
+function planDurationSec_(start, end){
+  const s = parseHHmmToMin_(start);
+  const e = parseHHmmToMin_(end);
+  if (s==null || e==null) return null;
+  let mins = e - s;
+  if (mins < 0) mins += 24*60;
+  return mins*60;
+}
+
+function parseHHmmToMin_(t){
+  const m = String(t||"").match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  return Number(m[1])*60+Number(m[2]);
+}
+
+function getInsights(dateStr){
+  const rows = getDayRows(dateStr);
+  if (!rows.length) return { ok:true, insights: [] };
+
+  function planStartMin(r){
+    const t = r.data.Plan_Start || "";
+    const m = t.match(/^(\d{1,2}):(\d{2})/);
+    if(!m) return null;
+    return Number(m[1])*60+Number(m[2]);
+  }
+
+  const buckets = new Array(24).fill(0);
+  for (const r of rows){
+    const s = planStartMin(r);
+    if (s==null) continue;
+    const hour = Math.floor(s/60);
+    buckets[hour] += Number(r.data.Actual_Seconds||0);
+  }
+  let bestHour = 0;
+  for (let h=0;h<24;h++) if (buckets[h] > buckets[bestHour]) bestHour = h;
+
+  let longest = rows[0];
+  for (const r of rows){
+    if ((r.data.Actual_Seconds||0) > (longest.data.Actual_Seconds||0)) longest = r;
+  }
+
+  const moved = rows.filter(r=>r.data.Status===STATUS.REPROGRAMMED || r.data.Moved_To_Date);
+
+  const movedCount = new Map();
+  for (const r of moved){
+    const k = (r.data.Activity||"").trim().toLowerCase();
+    if (!k) continue;
+    movedCount.set(k,(movedCount.get(k)||0)+1);
+  }
+  let worstMove = null;
+  for (const [k,v] of movedCount.entries()){
+    if (!worstMove || v>worstMove.v) worstMove={k,v};
+  }
+
+  const insights = [];
+  insights.push({ title:"🕒 Pico de productividad", value:`${String(bestHour).padStart(2,"0")}:00 – ${String(bestHour+1).padStart(2,"0")}:00` });
+  insights.push({ title:"🧠 Actividad más larga", value:`${longest.data.Activity} • ${(longest.data.Actual_Seconds/60).toFixed(0)} min` });
+
+  if (moved.length){
+    insights.push({ title:"⛔ Actividad más postergada", value:`${moved[0].data.Activity} (se movió)` });
+  } else {
+    insights.push({ title:"⛔ Actividad más postergada", value:"No hubo reprogramaciones" });
+  }
+
+  if (worstMove){
+    insights.push({ title:"🔁 Recurrente que siempre se mueve", value:`${worstMove.k} • ${worstMove.v} veces` });
+  } else {
+    insights.push({ title:"🔁 Recurrente que siempre se mueve", value:"Sin patrón aún" });
+  }
+
+  return { ok:true, insights };
+}
+
+function getWeekSummary(dateStr){
+  const sh = setupSheet_();
+  const lastRow = sh.getLastRow();
+  if (lastRow < 2) return { ok:true, days:[] };
+
+  const base = new Date(dateStr + "T00:00:00");
+  const start = new Date(base);
+  start.setDate(start.getDate()-6);
+
+  const values = sh.getRange(2,1,lastRow-1,HEADERS.length).getValues();
+  const byDay = new Map();
+
+  function within(d){
+    const dt = new Date(d + "T00:00:00");
+    return dt >= start && dt <= base;
+  }
+
+  for (const row of values){
+    const d = toYMD_(row[_idx_("Date")]);
+    if (!d || !within(d)) continue;
+
+    const planStart = normalizeTime_(row[_idx_("Plan_Start")]);
+    const planEnd = normalizeTime_(row[_idx_("Plan_End")]);
+    const planSec = planDurationSec_(planStart, planEnd);
+    const actualSec = Number(row[_idx_("Actual_Seconds")]||0);
+    const top3 = row[_idx_("Top3")]===true;
+    const status = String(row[_idx_("Status")]||STATUS.PENDING);
+
+    if (!byDay.has(d)) byDay.set(d, { date:d, planSec:0, actualSec:0, top3Total:0, top3Done:0 });
+    const agg = byDay.get(d);
+
+    if (planSec!=null) agg.planSec += planSec;
+    agg.actualSec += actualSec;
+
+    if (top3){
+      agg.top3Total += 1;
+      if (status===STATUS.DONE) agg.top3Done += 1;
+    }
+  }
+
+  const days = [...byDay.values()].sort((a,b)=>a.date.localeCompare(b.date));
+  return { ok:true, days };
+}
+
+function planTomorrow(fromDateStr){
+  const sh = setupSheet_();
+  const lastRow = sh.getLastRow();
+  if (lastRow < 2) return { ok:true, created:0 };
+
+  const values = sh.getRange(2,1,lastRow-1,HEADERS.length).getValues();
+
+  const hist = new Map();
+  const histCount = new Map();
+  for (const row of values){
+    const act = String(row[_idx_("Activity")]||"").trim().toLowerCase();
+    if (!act) continue;
+    const sec = Number(row[_idx_("Actual_Seconds")]||0);
+    if (sec>0){
+      hist.set(act, (hist.get(act)||0)+sec);
+      histCount.set(act,(histCount.get(act)||0)+1);
+    }
+  }
+
+  const tomorrow = new Date(fromDateStr + "T00:00:00");
+  tomorrow.setDate(tomorrow.getDate()+1);
+  const toYMD = Utilities.formatDate(tomorrow, TZ, "yyyy-MM-dd");
+
+  let created = 0;
+
+  for (const row of values){
+    const d = toYMD_(row[_idx_("Date")]);
+    if (d !== fromDateStr) continue;
+
+    const status = String(row[_idx_("Status")]||STATUS.PENDING);
+    if (![STATUS.PENDING, STATUS.PAUSED, STATUS.RUNNING, STATUS.REPROGRAMMED].includes(status)) continue;
+
+    const act = String(row[_idx_("Activity")]||"");
+    const type = String(row[_idx_("Type")]||"");
+    const pr = row[_idx_("Priority")];
+    const top3 = row[_idx_("Top3")]===true;
+    const obj = String(row[_idx_("Objective")]||"");
+
+    const key = act.trim().toLowerCase();
+    const avg = hist.has(key) ? (hist.get(key)/histCount.get(key)) : null;
+
+    let ps = normalizeTime_(row[_idx_("Plan_Start")]);
+    let pe = normalizeTime_(row[_idx_("Plan_End")]);
+
+    if (ps && !pe && avg!=null){
+      const sMin = parseHHmmToMin_(ps);
+      const eMin = sMin + Math.round(avg/60);
+      pe = `${String(Math.floor(eMin/60)%24).padStart(2,"0")}:${String(eMin%60).padStart(2,"0")}`;
+    }
+
+    const newRow = new Array(HEADERS.length).fill("");
+    newRow[_idx_("Date")] = parseYMD_(toYMD);
+    newRow[_idx_("Plan_Start")] = ps;
+    newRow[_idx_("Plan_End")] = pe;
+    newRow[_idx_("Activity")] = act;
+    newRow[_idx_("Type")] = type;
+    newRow[_idx_("Priority")] = pr;
+    newRow[_idx_("Top3")] = top3;
+    newRow[_idx_("Objective")] = obj;
+    newRow[_idx_("Status")] = STATUS.PENDING;
+    newRow[_idx_("Created_At")] = new Date();
+    newRow[_idx_("Updated_At")] = new Date();
+
+    sh.appendRow(newRow);
+    created++;
+  }
+
+  return { ok:true, created, date: toYMD };
+}
+
+function getMeta(){
+  return { ok:true, types: TYPE_DEFAULTS, statuses: Object.values(STATUS) };
+}
+
+
+
+
